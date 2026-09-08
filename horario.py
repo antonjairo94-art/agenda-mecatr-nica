@@ -1,13 +1,11 @@
 import streamlit as st
-from datetime import datetime, timedelta
 import pandas as pd
+from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Agenda Mecatrónica", page_icon="⚙️", layout="centered")
+st.set_page_config(page_title="Agenda & Taller Mecatrónico", page_icon="🛠️", layout="centered")
 
-# ==========================================
-# CONFIGURACIÓN DE BASE Y ROTACIÓN
-# ==========================================
-START_DATE = datetime(2026, 9, 2).date() # Sep 02 = Turno Mañana
+# --- CONFIGURACIÓN DE ROTACIÓN Y HORARIOS ---
+START_DATE = datetime(2026, 9, 2).date() # Sep 02 = Turno Mañana (07:00 - 15:00)
 
 SHIFTS = {
     0: {"name": "Turno Mañana (07:00 - 15:00)", "type": "M", "free_hrs_weekday": 2.5, "free_hrs_weekend": 6.0},
@@ -16,9 +14,10 @@ SHIFTS = {
     3: {"name": "Día de Descanso",             "type": "D", "free_hrs_weekday": 6.0, "free_hrs_weekend": 10.0}
 }
 
+# Horarios lectivos (0: Lunes, 1: Martes, 2: Miércoles, 3: Jueves, 4: Viernes)
 CLASSES = {
     0: [("13:50 - 15:30", "Manufactura"), ("15:40 - 17:20", "Diseño"), ("17:30 - 19:10", "Automatización")],
-    1: [("13:50 - 15:30", "Manufactura"), ("17:30 - 19:10", "Automatización")],
+    1: [("13:50 - 15:30", "Manufactura"), ("15:40 - 17:20", "Robótica"), ("17:30 - 19:10", "Automatización")], # Robótica añadida los martes
     2: [],
     3: [("13:50 - 15:30", "Mantenimiento"), ("17:30 - 19:10", "Robótica")],
     4: [("13:50 - 15:30", "Mantenimiento"), ("17:30 - 19:10", "Robótica")],
@@ -26,178 +25,124 @@ CLASSES = {
     6: []
 }
 
-# Inicializar Base de Datos Local en Sesión
-if "agenda_db" not in st.session_state:
-    st.session_state.agenda_db = []
+DIAS_SEMANA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 
-# ==========================================
-# FUNCIONES DE LÓGICA
-# ==========================================
+# --- FUNCIONES DE LÓGICA DE ROTACIÓN ---
 def get_shift_info(target_date):
     delta_days = (target_date - START_DATE).days
     shift_idx = delta_days % 4
     return SHIFTS[shift_idx], shift_idx
 
-def get_day_classes(target_date):
-    weekday = target_date.weekday()
-    return CLASSES.get(weekday, [])
-
 def evaluate_class_attendance(shift_idx, class_start):
     if shift_idx == 1: # Turno Tarde
         return "🔴 FALTA TOTAL (Cruce laboral)"
-    elif shift_idx == 0 and class_start == "13:50 - 15:30":
+    elif shift_idx == 0 and "13:50" in class_start:
         return "🟡 NO LLEGAS (Sales 3pm de Sechura)"
-    elif shift_idx == 0 and class_start == "15:40 - 17:20":
+    elif shift_idx == 0 and "15:40" in class_start:
         return "🟡 LLEGAS PARCIAL (~4:30 PM a Piura)"
     else:
         return "🟢 ASISTES NORMAL"
 
-def calculate_free_hours(target_date):
-    shift, shift_idx = get_shift_info(target_date)
-    is_weekend = target_date.weekday() >= 5
-    base_free = shift["free_hrs_weekend"] if is_weekend else shift["free_hrs_weekday"]
-    
-    # Descontar horas de reparaciones agendadas
-    agendado = sum(item['duracion'] for item in st.session_state.agenda_db if item['fecha'] == target_date)
-    return max(0.0, base_free - agendado)
+# --- INICIALIZAR MEMORIA DE REPARACIONES ---
+if "reparaciones" not in st.session_state:
+    st.session_state.reparaciones = []
+
+# --- ENCABEZADO Y FECHA ---
+ahora = datetime.now()
+nombre_dia = DIAS_SEMANA[ahora.weekday()]
+num_dia = ahora.day
+nombre_mes = MESES[ahora.month - 1]
+anio = ahora.year
+
+fecha_larga = f"{nombre_dia} {num_dia} de {nombre_mes} del {anio}"
+fecha_corta = f"{num_dia:02d}/{ahora.month:02d}/{anio}"
+
+st.title("🛠️ Agenda & Taller Mecatrónico")
+st.subheader(f"📅 Hoy: {fecha_larga}")
+st.divider()
+
+# --- PESTAÑAS PRINCIPALES ---
+tab1, tab2 = st.tabs(["⏰ Horario y Turnos", "📋 Control de Reparaciones"])
 
 # ==========================================
-# INTERFAZ DE USUARIO (MÓVIL)
+# PESTAÑA 1: HORARIOS Y COINCIDENCIAS
 # ==========================================
-st.title("⚙️ Mi Agenda Mecatrónica")
-st.caption("Control de Turnos, Clases, Trabajos de U y Reparaciones")
-
-menu = st.sidebar.radio("Navegación", ["📅 Vista Diario / Hoy", "🔍 Agendar Reparación (Buscador)", "🎓 Tareas de Universidad", "📋 Lista de Pendientes"])
-
-# ------------------------------------------
-# OPCIÓN 1: VISTA DIARIO / HOY
-# ------------------------------------------
-if menu == "📅 Vista Diario / Hoy":
-    st.subheader("📅 Consulta Diaria")
-    selected_date = st.date_input("Selecciona una fecha:", datetime.now().date())
+with tab1:
+    st.header("Consulta de Turno y Clases")
+    selected_date = st.date_input("Seleccionar fecha a consultar:", ahora.date())
     
+    sel_weekday = selected_date.weekday()
+    sel_nombre_dia = DIAS_SEMANA[sel_weekday]
     shift_info, shift_idx = get_shift_info(selected_date)
-    day_classes = get_day_classes(selected_date)
-    free_hrs = calculate_free_hours(selected_date)
+    day_classes = CLASSES.get(sel_weekday, [])
     
-    # Tarjeta de Turno
     st.info(f"💼 **Trabajo:** {shift_info['name']}")
     
-    # Tarjeta de Horas Libres
-    st.success(f"⏳ **Horas Libres Disponibles:** {free_hrs} horas útiles")
-    
-    # Sección Clases
-    st.markdown("### 🎓 Clases en Piura")
+    st.markdown(f"### 🎓 Clases del {sel_nombre_dia}")
     if not day_classes:
-        st.write("No tienes clases programadas este día.")
+        st.write("No tienes clases programadas para este día.")
     else:
         for hor, curso in day_classes:
             estado = evaluate_class_attendance(shift_idx, hor)
             st.write(f"• **{curso}** ({hor}): {estado}")
-            
-    # Actividades Agendadas
-    st.markdown("### 🛠️ Reparaciones y Tareas para este día")
-    actividades = [x for x in st.session_state.agenda_db if x['fecha'] == selected_date]
-    if not actividades:
-        st.caption("No hay tareas ni reparaciones agendadas para hoy.")
-    else:
-        for act in actividades:
-            tipo_icon = "🛠️" if act['tipo'] == "Reparación" else "🎓"
-            st.warning(f"{tipo_icon} **{act['titulo']}** ({act['duracion']} hrs) - Entrega/Fecha: {act['fecha_entrega']}")
 
-# ------------------------------------------
-# OPCIÓN 2: BUSCADOR DE HUECOS LIBRES
-# ------------------------------------------
-elif menu == "🔍 Agendar Reparación (Buscador)":
-    st.subheader("🔍 Asistente de Disponibilidad")
-    st.write("Encuentra automáticamente el día más cercano con horas libres suficientes.")
+# ==========================================
+# PESTAÑA 2: REPARACIONES Y GANANCIAS
+# ==========================================
+with tab2:
+    st.header("Gestionar Pedidos de Taller")
     
-    with st.form("form_reparacion"):
-        cliente = st.text_input("Cliente / Nombre del trabajo:", placeholder="Ej. Impresora Epson L3110")
-        duracion_req = st.number_input("Horas estimadas de trabajo:", min_value=0.5, max_value=8.0, value=2.0, step=0.5)
-        dias_max = st.slider("Buscar dentro de los próximos (días):", 1, 30, 14)
-        submitted = st.form_submit_button("🔎 Buscar Día Libre Más Cercano")
-        
-    if submitted:
-        today = datetime.now().date()
-        encontrado = None
-        
-        for i in range(dias_max):
-            eval_date = today + timedelta(days=i)
-            hrs_disp = calculate_free_hours(eval_date)
-            if hrs_disp >= duracion_req:
-                encontrado = eval_date
-                break
-                
-        if encontrado:
-            shift_f, _ = get_shift_info(encontrado)
-            st.success(f"🎯 **¡Día libre encontrado!**")
-            st.write(f"• **Fecha:** {encontrado.strftime('%A %d de %B, %Y')}")
-            st.write(f"• **Turno de trabajo ese día:** {shift_f['name']}")
-            st.write(f"• **Horas libres disponibles:** {calculate_free_hours(encontrado)} hrs")
+    with st.form("nuevo_pedido", clear_on_submit=True):
+        st.subheader("➕ Registrar Nuevo Trabajo")
+        col_c, col_e, col_p = st.columns([2, 2, 1])
+        with col_c:
+            cliente = st.text_input("Nombre del Cliente")
+        with col_e:
+            equipo = st.text_input("Equipo / Artefacto")
+        with col_p:
+            precio = st.number_input("Precio (S/.)", min_value=0.0, step=5.0)
             
-            if st.button("✅ Confirmar y Agendar Reparación"):
-                st.session_state.agenda_db.append({
-                    "tipo": "Reparación",
-                    "titulo": f"Reparación: {cliente}",
-                    "fecha": encontrado,
-                    "fecha_entrega": encontrado + timedelta(days=1),
-                    "duracion": duracion_req
-                })
-                st.balloons()
-                st.success("¡Agendado exitosamente!")
-        else:
-            st.error("❌ No se encontró ningún día con tantas horas libres continuas en el rango seleccionado.")
-
-# ------------------------------------------
-# OPCIÓN 3: TAREAS DE UNIVERSIDAD
-# ------------------------------------------
-elif menu == "🎓 Tareas de Universidad":
-    st.subheader("🎓 Programar Trabajo / Proyecto de U")
-    
-    with st.form("form_u"):
-        titulo_u = st.text_input("Nombre del trabajo/proyecto:", placeholder="Ej. Informe de Lab Robótica")
-        fecha_entrega = st.date_input("Fecha límite de entrega:", datetime.now().date() + timedelta(days=3))
-        hrs_u = st.number_input("Horas de dedicación requeridas:", min_value=0.5, value=2.0)
-        submit_u = st.form_submit_button("📌 Registrar Tarea")
+        btn_guardar = st.form_submit_button("Guardar Pedido")
         
-    if submit_u:
-        # Asignar automáticamente al día anterior a la entrega o al día de hoy
-        fecha_trabajo = fecha_entrega - timedelta(days=1)
-        st.session_state.agenda_db.append({
-            "tipo": "Universidad",
-            "titulo": titulo_u,
-            "fecha": fecha_trabajo,
-            "fecha_entrega": fecha_entrega,
-            "duracion": hrs_u
-        })
-        st.success(f"Tarea registrada. Programada para avanzar el {fecha_trabajo} (un día antes de la entrega).")
-
-# ------------------------------------------
-# OPCIÓN 4: LISTA DE PENDIENTES
-# ------------------------------------------
-elif menu == "📋 Lista de Pendientes":
-    st.subheader("📋 Estado de Entregas y Alertas")
-    
-    if not st.session_state.agenda_db:
-        st.info("No hay compromisos agendados.")
-    else:
-        today = datetime.now().date()
-        for idx, item in enumerate(st.session_state.agenda_db):
-            dias_faltantes = (item['fecha_entrega'] - today).days
-            
-            if dias_faltantes < 0:
-                alerta = "🔴 VENCIDO"
-            elif dias_faltantes <= 2:
-                alerta = f"🚨 ENTREGAR EN {dias_faltantes} DÍAS"
+        if btn_guardar:
+            if cliente and equipo:
+                nuevo_item = {
+                    "id": len(st.session_state.reparaciones) + 1,
+                    "cliente": cliente,
+                    "equipo": equipo,
+                    "precio": precio,
+                    "estado": "Pendiente",
+                    "fecha": fecha_corta
+                }
+                st.session_state.reparaciones.append(nuevo_item)
+                st.success(f"¡Pedido registrado correctamente!")
             else:
-                alerta = f"🟢 Faltan {dias_faltantes} días"
-                
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.write(f"**{item['titulo']}** [{item['tipo']}]")
-                st.caption(f"Día de trabajo: {item['fecha']} | Fecha Entrega: {item['fecha_entrega']} | {alerta}")
-            with col2:
-                if st.button("Eliminar", key=f"del_{idx}"):
-                    st.session_state.agenda_db.pop(idx)
+                st.warning("Completa el cliente y el equipo.")
+
+    st.divider()
+
+    completados = [r for r in st.session_state.reparaciones if r["estado"] == "Entregado"]
+    total_ganancias = sum(r["precio"] for r in completados)
+    
+    col_m1, col_m2 = st.columns(2)
+    col_m1.metric("💰 Ganancia Acumulada", f"S/. {total_ganancias:.2f}")
+    col_m2.metric("📦 Entregados", f"{len(completados)}")
+
+    st.divider()
+    st.subheader("⏳ Reparaciones Pendientes")
+    pendientes = [r for r in st.session_state.reparaciones if r["estado"] == "Pendiente"]
+
+    if not pendientes:
+        st.info("Sin reparaciones pendientes.")
+    else:
+        for item in pendientes:
+            col_info, col_btn = st.columns([3, 1])
+            with col_info:
+                st.markdown(f"**{item['equipo']}** - *{item['cliente']}* | **S/. {item['precio']:.2f}** ({item['fecha']})")
+            with col_btn:
+                if st.button("✅ Listo / OK", key=f"btn_{item['id']}"):
+                    for r in st.session_state.reparaciones:
+                        if r["id"] == item["id"]:
+                            r["estado"] = "Entregado"
                     st.rerun()
