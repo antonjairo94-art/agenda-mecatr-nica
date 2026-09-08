@@ -32,7 +32,7 @@ SHIFTS = {
 
 CLASSES = {
     0: [("13:50 - 15:30", "Manufactura"), ("15:40 - 17:20", "Diseño"), ("17:30 - 19:10", "Automatización")],
-    1: [("13:50 - 15:30", "Manufactura"), ("15:40 - 17:20", "Robótica"), ("17:30 - 19:10", "Automatización")], # Added Robótica on Tuesdays
+    1: [("13:50 - 15:30", "Manufactura"), ("15:40 - 17:20", "Robótica"), ("17:30 - 19:10", "Automatización")],
     2: [],
     3: [("13:50 - 15:30", "Mantenimiento"), ("17:30 - 19:10", "Robótica")],
     4: [("13:50 - 15:30", "Mantenimiento"), ("17:30 - 19:10", "Robótica")],
@@ -88,7 +88,9 @@ menu = st.sidebar.radio("Navegación", ["📅 Vista Diario / Hoy", "🔍 Agendar
 # ------------------------------------------
 if menu == "📅 Vista Diario / Hoy":
     st.subheader("📅 Consulta Diaria")
-    selected_date = st.date_input("Selecciona una fecha:", datetime.now().date())
+    
+    # Se agrega format="DD/MM/YYYY" para mostrar día/mes/año en el selector
+    selected_date = st.date_input("Selecciona una fecha:", datetime.now().date(), format="DD/MM/YYYY")
     
     st.markdown(f"**Fecha:** {format_date_spanish(selected_date)} ({format_date_short(selected_date)})")
     
@@ -177,7 +179,7 @@ elif menu == "🎓 Tareas de Universidad":
     
     with st.form("form_u"):
         titulo_u = st.text_input("Nombre del trabajo/proyecto:", placeholder="Ej. Informe de Lab Robótica")
-        fecha_entrega = st.date_input("Fecha límite de entrega:", datetime.now().date() + timedelta(days=3))
+        fecha_entrega = st.date_input("Fecha límite de entrega:", datetime.now().date() + timedelta(days=3), format="DD/MM/YYYY")
         hrs_u = st.number_input("Horas de dedicación requeridas:", min_value=0.5, value=2.0)
         submit_u = st.form_submit_button("📌 Registrar Tarea")
         
