@@ -1,3 +1,12 @@
+¡Entendido perfectamente! Eliminamos el botón y dejamos que el sistema lo haga de forma **100% automática**.
+
+Ahora, cada vez que salgas de la pantalla principal (**"📅 Vista Diario / Hoy"**) a otra pestaña (como agendar una reparación o ver pendientes) y regreses a la pantalla inicial, el selector de fecha **se restablecerá automáticamente a la fecha del día de hoy**.
+
+---
+
+### Código Completo Actualizado para `horario.py`
+
+```python
 import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
@@ -11,17 +20,15 @@ DIAS_SEMANA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", 
 MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 
 def format_date_spanish(d):
-    """Devuelve: Miércoles 09 de Septiembre del 2026"""
     return f"{DIAS_SEMANA[d.weekday()]} {d.day:02d} de {MESES[d.month-1]} del {d.year}"
 
 def format_date_short(d):
-    """Devuelve: 09/09/2026"""
     return f"{d.day:02d}/{d.month:02d}/{d.year}"
 
 # ==========================================
 # CONFIGURACIÓN DE BASE Y ROTACIÓN
 # ==========================================
-START_DATE = datetime(2026, 9, 2).date() # Sep 02 = Turno Mañana
+START_DATE = datetime(2026, 9, 2).date()
 
 SHIFTS = {
     0: {"name": "Turno Mañana (07:00 - 15:00)", "type": "M", "free_hrs_weekday": 2.5, "free_hrs_weekend": 6.0},
@@ -40,9 +47,14 @@ CLASSES = {
     6: []
 }
 
-# Inicializar Base de Datos Local en Sesión
 if "agenda_db" not in st.session_state:
     st.session_state.agenda_db = []
+
+if "busqueda_temp" not in st.session_state:
+    st.session_state.busqueda_temp = None
+
+if "fecha_diaria" not in st.session_state:
+    st.session_state.fecha_diaria = datetime.now().date()
 
 # ==========================================
 # FUNCIONES DE LÓGICA
@@ -57,7 +69,7 @@ def get_day_classes(target_date):
     return CLASSES.get(weekday, [])
 
 def evaluate_class_attendance(shift_idx, class_start):
-    if shift_idx == 1: # Turno Tarde
+    if shift_idx == 1:
         return "🔴 FALTA TOTAL (Cruce laboral)"
     elif shift_idx == 0 and class_start == "13:50 - 15:30":
         return "🟡 NO LLEGAS (Sales 3pm de Sechura)"
@@ -70,8 +82,6 @@ def calculate_free_hours(target_date):
     shift, shift_idx = get_shift_info(target_date)
     is_weekend = target_date.weekday() >= 5
     base_free = shift["free_hrs_weekend"] if is_weekend else shift["free_hrs_weekday"]
-    
-    # Descontar horas de reparaciones agendadas pendientes
     agendado = sum(item['duracion'] for item in st.session_state.agenda_db if item['fecha'] == target_date and item.get('estado') == 'Pendiente')
     return max(0.0, base_free - agendado)
 
@@ -83,14 +93,23 @@ st.caption("Control de Turnos, Clases, Trabajos de U y Reparaciones")
 
 menu = st.sidebar.radio("Navegación", ["📅 Vista Diario / Hoy", "🔍 Agendar Reparación (Buscador)", "🎓 Tareas de Universidad", "📋 Lista de Pendientes"])
 
+# Restablece la fecha automáticamente a HOY si cambias de pestaña y vuelves al inicio
+if "last_menu" not in st.session_state:
+    st.session_state.last_menu = menu
+
+if menu != st.session_state.last_menu:
+    if menu == "📅 Vista Diario / Hoy":
+        st.session_state.fecha_diaria = datetime.now().date()
+    st.session_state.last_menu = menu
+
 # ------------------------------------------
 # OPCIÓN 1: VISTA DIARIO / HOY
 # ------------------------------------------
 if menu == "📅 Vista Diario / Hoy":
     st.subheader("📅 Consulta Diaria")
     
-    # Se agrega format="DD/MM/YYYY" para mostrar día/mes/año en el selector
-    selected_date = st.date_input("Selecciona una fecha:", datetime.now().date(), format="DD/MM/YYYY")
+    selected_date = st.date_input("Selecciona una fecha:", st.session_state.fecha_diaria, format="DD/MM/YYYY")
+    st.session_state.fecha_diaria = selected_date
     
     st.markdown(f"**Fecha:** {format_date_spanish(selected_date)} ({format_date_short(selected_date)})")
     
@@ -98,13 +117,9 @@ if menu == "📅 Vista Diario / Hoy":
     day_classes = get_day_classes(selected_date)
     free_hrs = calculate_free_hours(selected_date)
     
-    # Tarjeta de Turno
     st.info(f"💼 **Trabajo:** {shift_info['name']}")
-    
-    # Tarjeta de Horas Libres
     st.success(f"⏳ **Horas Libres Disponibles:** {free_hrs} horas útiles")
     
-    # Sección Clases
     st.markdown("### 🎓 Clases en Piura")
     if not day_classes:
         st.write("No tienes clases programadas este día.")
@@ -113,7 +128,6 @@ if menu == "📅 Vista Diario / Hoy":
             estado = evaluate_class_attendance(shift_idx, hor)
             st.write(f"• **{curso}** ({hor}): {estado}")
             
-    # Actividades Agendadas
     st.markdown("### 🛠️ Reparaciones y Tareas para este día")
     actividades = [x for x in st.session_state.agenda_db if x['fecha'] == selected_date and x.get('estado') == 'Pendiente']
     if not actividades:
@@ -150,26 +164,39 @@ elif menu == "🔍 Agendar Reparación (Buscador)":
                 break
                 
         if encontrado:
-            shift_f, _ = get_shift_info(encontrado)
-            st.success(f"🎯 **¡Día libre encontrado!**")
-            st.write(f"• **Fecha:** {format_date_spanish(encontrado)} ({format_date_short(encontrado)})")
-            st.write(f"• **Turno de trabajo ese día:** {shift_f['name']}")
-            st.write(f"• **Horas libres disponibles:** {calculate_free_hours(encontrado)} hrs")
-            
-            if st.button("✅ Confirmar y Agendar Reparación"):
-                st.session_state.agenda_db.append({
-                    "tipo": "Reparación",
-                    "titulo": f"Reparación: {cliente}",
-                    "fecha": encontrado,
-                    "fecha_entrega": encontrado + timedelta(days=1),
-                    "duracion": duracion_req,
-                    "precio": precio_cobro,
-                    "estado": "Pendiente"
-                })
-                st.balloons()
-                st.success("¡Agendado exitosamente!")
+            st.session_state.busqueda_temp = {
+                "cliente": cliente,
+                "precio": precio_cobro,
+                "duracion": duracion_req,
+                "fecha": encontrado
+            }
         else:
+            st.session_state.busqueda_temp = None
             st.error("❌ No se encontró ningún día con tantas horas libres continuas en el rango seleccionado.")
+
+    if st.session_state.busqueda_temp:
+        res = st.session_state.busqueda_temp
+        shift_f, _ = get_shift_info(res["fecha"])
+        st.divider()
+        st.success("🎯 **¡Día libre encontrado!**")
+        st.write(f"• **Fecha:** {format_date_spanish(res['fecha'])} ({format_date_short(res['fecha'])})")
+        st.write(f"• **Turno de trabajo ese día:** {shift_f['name']}")
+        st.write(f"• **Horas libres disponibles:** {calculate_free_hours(res['fecha'])} hrs")
+        
+        if st.button("✅ Confirmar y Agendar Reparación"):
+            st.session_state.agenda_db.append({
+                "tipo": "Reparación",
+                "titulo": f"Reparación: {res['cliente']}",
+                "fecha": res['fecha'],
+                "fecha_entrega": res['fecha'] + timedelta(days=1),
+                "duracion": res['duracion'],
+                "precio": res['precio'],
+                "estado": "Pendiente"
+            })
+            st.session_state.busqueda_temp = None
+            st.balloons()
+            st.success("¡Agendado exitosamente!")
+            st.rerun()
 
 # ------------------------------------------
 # OPCIÓN 3: TAREAS DE UNIVERSIDAD
@@ -202,7 +229,6 @@ elif menu == "🎓 Tareas de Universidad":
 elif menu == "📋 Lista de Pendientes":
     st.subheader("📋 Estado de Entregas y Alertas")
     
-    # Ganancias Totales de Trabajos Entregados
     ganancias_totales = sum(item.get('precio', 0.0) for item in st.session_state.agenda_db if item.get('estado') == 'Completado' and item['tipo'] == 'Reparación')
     st.metric("💰 Ganancias Acumuladas (Reparaciones Entregadas)", f"S/. {ganancias_totales:.2f}")
     
@@ -238,3 +264,5 @@ elif menu == "📋 Lista de Pendientes":
                     if st.button("Eliminar", key=f"del_{idx}"):
                         st.session_state.agenda_db.pop(idx)
                         st.rerun()
+
+```
