@@ -1,6 +1,8 @@
 import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
+import json
+import os
 
 st.set_page_config(page_title="Agenda Mecatrónica", page_icon="⚙️", layout="centered")
 
@@ -15,6 +17,49 @@ def format_date_spanish(d):
 
 def format_date_short(d):
     return f"{d.day:02d}/{d.month:02d}/{d.year}"
+
+# ==========================================
+# MANEJO DE BASE DE DATOS (ARCHIVO JSON)
+# ==========================================
+ARCHIVO_BD = "agenda_datos.json"
+
+def cargar_datos():
+    """Lee el archivo JSON al iniciar la app para recuperar los datos guardados."""
+    if not os.path.exists(ARCHIVO_BD):
+        return []
+    with open(ARCHIVO_BD, "r") as f:
+        try:
+            datos = json.load(f)
+            # Convertimos las fechas de texto a formato fecha real para Python
+            for item in datos:
+                item['fecha'] = datetime.strptime(item['fecha'], "%Y-%m-%d").date()
+                item['fecha_entrega'] = datetime.strptime(item['fecha_entrega'], "%Y-%m-%d").date()
+            return datos
+        except:
+            return []
+
+def guardar_datos(datos):
+    """Guarda la lista actual en el archivo JSON físico."""
+    datos_guardar = []
+    for item in datos:
+        nuevo_item = item.copy()
+        # Convertimos las fechas a texto para poder guardarlas en JSON
+        nuevo_item['fecha'] = nuevo_item['fecha'].strftime("%Y-%m-%d")
+        nuevo_item['fecha_entrega'] = nuevo_item['fecha_entrega'].strftime("%Y-%m-%d")
+        datos_guardar.append(nuevo_item)
+        
+    with open(ARCHIVO_BD, "w") as f:
+        json.dump(datos_guardar, f, indent=4)
+
+# Inicializar Base de Datos cargando el archivo
+if "agenda_db" not in st.session_state:
+    st.session_state.agenda_db = cargar_datos()
+
+if "busqueda_temp" not in st.session_state:
+    st.session_state.busqueda_temp = None
+
+if "fecha_diaria" not in st.session_state:
+    st.session_state.fecha_diaria = datetime.now().date()
 
 # ==========================================
 # CONFIGURACIÓN DE BASE Y ROTACIÓN
@@ -37,15 +82,6 @@ CLASSES = {
     5: [],
     6: []
 }
-
-if "agenda_db" not in st.session_state:
-    st.session_state.agenda_db = []
-
-if "busqueda_temp" not in st.session_state:
-    st.session_state.busqueda_temp = None
-
-if "fecha_diaria" not in st.session_state:
-    st.session_state.fecha_diaria = datetime.now().date()
 
 # ==========================================
 # FUNCIONES DE LÓGICA
@@ -84,7 +120,6 @@ st.caption("Control de Turnos, Clases, Trabajos de U y Reparaciones")
 
 menu = st.sidebar.radio("Navegación", ["📅 Vista Diario / Hoy", "🔍 Agendar Reparación (Buscador)", "🎓 Tareas de Universidad", "📋 Lista de Pendientes"])
 
-# Restablece la fecha automáticamente a HOY si cambias de pestaña y vuelves al inicio
 if "last_menu" not in st.session_state:
     st.session_state.last_menu = menu
 
@@ -175,6 +210,7 @@ elif menu == "🔍 Agendar Reparación (Buscador)":
         st.write(f"• **Horas libres disponibles:** {calculate_free_hours(res['fecha'])} hrs")
         
         if st.button("✅ Confirmar y Agendar Reparación"):
+            # Agregar a la lista
             st.session_state.agenda_db.append({
                 "tipo": "Reparación",
                 "titulo": f"Reparación: {res['cliente']}",
@@ -184,6 +220,9 @@ elif menu == "🔍 Agendar Reparación (Buscador)":
                 "precio": res['precio'],
                 "estado": "Pendiente"
             })
+            # Guardar en el archivo físico
+            guardar_datos(st.session_state.agenda_db)
+            
             st.session_state.busqueda_temp = None
             st.balloons()
             st.success("¡Agendado exitosamente!")
@@ -212,6 +251,8 @@ elif menu == "🎓 Tareas de Universidad":
             "precio": 0.0,
             "estado": "Pendiente"
         })
+        guardar_datos(st.session_state.agenda_db)
+        
         st.success(f"Tarea registrada. Programada para avanzar el {format_date_short(fecha_trabajo)} (un día antes de la entrega).")
 
 # ------------------------------------------
@@ -220,6 +261,7 @@ elif menu == "🎓 Tareas de Universidad":
 elif menu == "📋 Lista de Pendientes":
     st.subheader("📋 Estado de Entregas y Alertas")
     
+    # Calcular y mostrar ganancias (ya son persistentes)
     ganancias_totales = sum(item.get('precio', 0.0) for item in st.session_state.agenda_db if item.get('estado') == 'Completado' and item['tipo'] == 'Reparación')
     st.metric("💰 Ganancias Acumuladas (Reparaciones Entregadas)", f"S/. {ganancias_totales:.2f}")
     
@@ -249,9 +291,11 @@ elif menu == "📋 Lista de Pendientes":
                     st.caption(f"Trabajo: {format_date_short(item['fecha'])} | Entrega: {format_date_short(item['fecha_entrega'])} | {alerta}")
                 with col2:
                     if st.button("✅ Listo / OK", key=f"ok_{idx}"):
-                        item['estado'] = 'Completado'
+                        st.session_state.agenda_db[idx]['estado'] = 'Completado'
+                        guardar_datos(st.session_state.agenda_db) # Guarda el cambio
                         st.rerun()
                 with col3:
                     if st.button("Eliminar", key=f"del_{idx}"):
                         st.session_state.agenda_db.pop(idx)
+                        guardar_datos(st.session_state.agenda_db) # Guarda la eliminación
                         st.rerun()
