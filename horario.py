@@ -1,12 +1,3 @@
-¡Entendido perfectamente! Eliminamos el botón y dejamos que el sistema lo haga de forma **100% automática**.
-
-Ahora, cada vez que salgas de la pantalla principal (**"📅 Vista Diario / Hoy"**) a otra pestaña (como agendar una reparación o ver pendientes) y regreses a la pantalla inicial, el selector de fecha **se restablecerá automáticamente a la fecha del día de hoy**.
-
----
-
-### Código Completo Actualizado para `horario.py`
-
-```python
 import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
