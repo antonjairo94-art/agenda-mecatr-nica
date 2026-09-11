@@ -7,6 +7,10 @@ st.set_page_config(page_title="Agenda Mecatrónica", page_icon="⚙️", layout=
 
 DATA_FILE = "agenda_data.json"
 
+# TIEMPOS DE VIAJE FIJOS (en minutos)
+VIAJE_IDA = 135    # 2 horas 15 minutos (Sechura ➔ Piura)
+VIAJE_VUELTA = 180 # 3 horas (Piura ➔ Sechura)
+
 DIAS_SEMANA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto",
          "Septiembre", "Octubre", "Noviembre", "Diciembre"]
@@ -22,15 +26,15 @@ def format_date_short(d):
 # ==========================================
 START_DATE = datetime(2026, 9, 2).date()
 
-# minutos desde medianoche
+# Minutos desde medianoche
 SHIFTS = {
     0: {"name": "Turno Mañana", "start": 7*60,  "end": 15*60},
     1: {"name": "Turno Tarde",  "start": 15*60, "end": 23*60},
-    2: {"name": "Turno Noche",  "start": 23*60, "end": 24*60},  # + cola 0-7*60 al día siguiente
-    3: {"name": "Descanso",     "start": None,  "end": None},
+    2: {"name": "Turno Noche",  "start": 23*60, "end": 24*60},
+    3: {"name": "Descanso",      "start": None,  "end": None},
 }
 
-# horario real de clases: weekday() -> lista de (inicio_min, fin_min, nombre)
+# Horario real de clases (minutos desde medianoche: Ej. 830 = 13:50, 930 = 15:30)
 CLASSES = {
     0: [(830, 930, "Manufactura"), (940, 1040, "Diseño"), (1050, 1150, "Automatización")],
     1: [(830, 930, "Manufactura"), (940, 1040, "Robótica"), (1050, 1150, "Automatización")],
@@ -40,8 +44,6 @@ CLASSES = {
     5: [],
     6: [],
 }
-
-TRAVEL_MIN_DEFAULT = 45  # minutos de viaje Sechura <-> Piura, configurable en Ajustes
 
 def hhmm(m):
     h, mm = divmod(int(m), 60)
@@ -80,9 +82,6 @@ def save_data(data):
 if "agenda_db" not in st.session_state:
     st.session_state.agenda_db = load_data()
 
-if "travel_min" not in st.session_state:
-    st.session_state.travel_min = TRAVEL_MIN_DEFAULT
-
 if "busqueda_temp" not in st.session_state:
     st.session_state.busqueda_temp = None
 
@@ -90,67 +89,73 @@ if "fecha_diaria" not in st.session_state:
     st.session_state.fecha_diaria = datetime.now().date()
 
 # ==========================================
-# LÓGICA DE HORARIO (cálculo minuto a minuto, sin constantes fijas)
+# LÓGICA DE HORARIO Y TIEMPOS REALES
 # ==========================================
 def get_shift_info(target_date):
     delta_days = (target_date - START_DATE).days
     shift_idx = delta_days % 4
     return SHIFTS[shift_idx], shift_idx
 
-def build_day_minutes(target_date, travel_min):
-    """Devuelve un array de 1440 minutos etiquetados: 'turno' | 'clase' | 'ambos' | 'libre'."""
+def build_day_minutes(target_date):
+    """Devuelve un array de 1440 minutos etiquetados con la disponibilidad real."""
     minutes = ["libre"] * 1440
     shift, shift_idx = get_shift_info(target_date)
 
-    if shift_idx == 0:  # Mañana 7-15
-        for m in range(7*60, 15*60):
-            minutes[m] = "turno"
-    elif shift_idx == 1:  # Tarde 15-23
-        for m in range(15*60, 23*60):
-            minutes[m] = "turno"
-    elif shift_idx == 2:  # Noche 23-24 (la cola 0-7 cae en el día de Descanso siguiente)
-        for m in range(23*60, 24*60):
-            minutes[m] = "turno"
-    elif shift_idx == 3:  # Descanso: hereda la cola del turno noche anterior (0-7am)
-        for m in range(0, 7*60):
-            minutes[m] = "turno"
+    if shift_idx == 0:
+        for m in range(7*60, 15*60): minutes[m] = "turno"
+    elif shift_idx == 1:
+        for m in range(15*60, 23*60): minutes[m] = "turno"
+    elif shift_idx == 2:
+        for m in range(23*60, 24*60): minutes[m] = "turno"
+    elif shift_idx == 3:
+        for m in range(0, 7*60): minutes[m] = "turno"
 
-    weekday = target_date.weekday()
-    classes = CLASSES.get(weekday, [])
-    for (s, e, _n) in classes:
-        for m in range(s, e):
-            minutes[m] = "ambos" if minutes[m] == "turno" else "clase"
+    classes = CLASSES.get(target_date.weekday(), [])
     if classes:
         first_s = classes[0][0]
         last_e = classes[-1][1]
-        t_start = max(0, first_s - travel_min)
-        for m in range(t_start, first_s):
-            minutes[m] = "ambos" if minutes[m] == "turno" else "clase"
-        t_end = min(1440, last_e + travel_min)
-        for m in range(last_e, t_end):
-            minutes[m] = "ambos" if minutes[m] == "turno" else "clase"
+        
+        # Bloquea todo el tiempo de ausencia considerando el viaje real Sechura <-> Piura
+        start_ausencia = max(0, first_s - VIAJE_IDA)
+        end_ausencia = min(1440, last_e + VIAJE_VUELTA)
+        
+        for m in range(start_ausencia, end_ausencia):
+            if minutes[m] == "turno":
+                minutes[m] = "ambos"
+            else:
+                minutes[m] = "clase_o_viaje"
 
     return minutes
 
 def get_day_classes(target_date):
     return CLASSES.get(target_date.weekday(), [])
 
-def evaluate_class_attendance(target_date, class_start, class_end, travel_min):
-    """Evalúa asistencia real cruzando minuto a minuto contra el turno de ese día."""
-    minutes = build_day_minutes(target_date, travel_min=0)  # sin viaje: solo choque real de turno
-    block = minutes[class_start:class_end]
-    turno_minutes = sum(1 for x in block if x in ("turno", "ambos"))
-    total = class_end - class_start
-    if turno_minutes == 0:
+def evaluate_class_attendance(target_date, class_start, class_end):
+    """Evalúa si puedes asistir a clases tomando en cuenta el turno y el viaje real."""
+    shift, shift_idx = get_shift_info(target_date)
+    if shift_idx == 3: 
         return "🟢 ASISTES NORMAL"
-    elif turno_minutes == total:
-        return "🔴 FALTA TOTAL (cruce con el turno)"
+        
+    shift_s = SHIFTS[shift_idx]["start"]
+    shift_e = SHIFTS[shift_idx]["end"]
+    
+    # Ventana bloqueada en Piura por cruce con trabajo o tiempos de viaje
+    piura_bloqueado_inicio = shift_s - VIAJE_VUELTA
+    piura_bloqueado_fin = shift_e + VIAJE_IDA
+    
+    cruce = max(0, min(class_end, piura_bloqueado_fin) - max(class_start, piura_bloqueado_inicio))
+    duracion_clase = class_end - class_start
+    
+    if cruce == 0:
+        return "🟢 ASISTES NORMAL"
+    elif cruce == duracion_clase:
+        return "🔴 FALTA TOTAL (Cruce con trabajo o viaje)"
     else:
-        pct = round(100 * (total - turno_minutes) / total)
+        pct = round(100 * (duracion_clase - cruce) / duracion_clase)
         return f"🟡 ASISTES PARCIAL (~{pct}% de la clase)"
 
-def calculate_free_hours(target_date, travel_min, exclude_id=None):
-    minutes = build_day_minutes(target_date, travel_min)
+def calculate_free_hours(target_date, exclude_id=None):
+    minutes = build_day_minutes(target_date)
     free_minutes = sum(1 for x in minutes if x == "libre")
     base_free = free_minutes / 60.0
     agendado = sum(
@@ -161,7 +166,6 @@ def calculate_free_hours(target_date, travel_min, exclude_id=None):
     return round(max(0.0, base_free - agendado), 1)
 
 def buscar_dias_libres(duracion_req, dias_max, hasta_fecha=None):
-    """Devuelve hasta 3 días candidatos ordenados por horas libres, dentro del rango."""
     today = datetime.now().date()
     candidatos = []
     limite = dias_max
@@ -169,7 +173,7 @@ def buscar_dias_libres(duracion_req, dias_max, hasta_fecha=None):
         limite = min(dias_max, max(1, (hasta_fecha - today).days))
     for i in range(limite + 1):
         d = today + timedelta(days=i)
-        libres = calculate_free_hours(d, st.session_state.travel_min)
+        libres = calculate_free_hours(d)
         if libres >= duracion_req:
             candidatos.append((d, libres))
     candidatos.sort(key=lambda x: -x[1])
@@ -185,8 +189,7 @@ menu = st.sidebar.radio("Navegación", [
     "📅 Vista Diario / Hoy",
     "🔍 Agendar Reparación (Buscador)",
     "🎓 Tareas de Universidad",
-    "📋 Lista de Pendientes",
-    "⚙️ Ajustes",
+    "📋 Lista de Pendientes"
 ])
 
 if "last_menu" not in st.session_state:
@@ -209,13 +212,13 @@ if menu == "📅 Vista Diario / Hoy":
 
     shift_info, shift_idx = get_shift_info(selected_date)
     day_classes = get_day_classes(selected_date)
-    free_hrs = calculate_free_hours(selected_date, st.session_state.travel_min)
+    free_hrs = calculate_free_hours(selected_date)
 
     if shift_idx in (0, 1, 2):
         horario_txt = f"{hhmm(SHIFTS[shift_idx]['start'])} - {hhmm(SHIFTS[shift_idx]['end'] % 1440 or 1440)}"
         st.info(f"💼 **Trabajo:** {shift_info['name']} ({horario_txt})")
     else:
-        st.info(f"💼 **Trabajo:** {shift_info['name']} (libre desde las 7:00am)")
+        st.info(f"💼 **Trabajo:** {shift_info['name']} (libre)")
 
     st.success(f"⏳ **Horas Libres Disponibles:** {free_hrs} horas")
 
@@ -224,7 +227,7 @@ if menu == "📅 Vista Diario / Hoy":
         st.write("No tienes clases programadas este día.")
     else:
         for s, e, curso in day_classes:
-            estado = evaluate_class_attendance(selected_date, s, e, st.session_state.travel_min)
+            estado = evaluate_class_attendance(selected_date, s, e)
             st.write(f"• **{curso}** ({hhmm(s)} - {hhmm(e)}): {estado}")
 
     st.markdown("### 🛠️ Reparaciones y Tareas para este día")
@@ -266,8 +269,7 @@ elif menu == "🔍 Agendar Reparación (Buscador)":
             }
         else:
             st.session_state.busqueda_temp = None
-            st.error("❌ No se encontró ningún día con suficientes horas libres en ese rango. "
-                      "Prueba con menos horas requeridas o un rango de búsqueda más amplio.")
+            st.error("❌ No se encontró ningún día con suficientes horas libres en ese rango.")
 
     if st.session_state.busqueda_temp:
         res = st.session_state.busqueda_temp
@@ -325,8 +327,7 @@ elif menu == "🎓 Tareas de Universidad":
             st.success(f"Tarea registrada. Mejor día encontrado para avanzarla: "
                        f"{format_date_spanish(mejor_fecha)} ({libres}h libres).")
         else:
-            st.error("❌ No hay ningún día antes de la entrega con suficientes horas libres. "
-                      "Considera reducir las horas estimadas o revisar tu carga esa semana.")
+            st.error("❌ No hay ningún día antes de la entrega con suficientes horas libres.")
 
 # ------------------------------------------
 # OPCIÓN 4: LISTA DE PENDIENTES
@@ -374,16 +375,3 @@ elif menu == "📋 Lista de Pendientes":
                         st.session_state.agenda_db.pop(idx)
                         save_data(st.session_state.agenda_db)
                         st.rerun()
-
-# ------------------------------------------
-# OPCIÓN 5: AJUSTES
-# ------------------------------------------
-elif menu == "⚙️ Ajustes":
-    st.subheader("⚙️ Ajustes")
-    nuevo_travel = st.number_input(
-        "Minutos de viaje Sechura ↔ Piura (cada tramo):",
-        min_value=0, max_value=180, value=st.session_state.travel_min, step=5
-    )
-    if nuevo_travel != st.session_state.travel_min:
-        st.session_state.travel_min = nuevo_travel
-        st.success("Ajuste guardado para esta sesión.")
