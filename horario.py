@@ -255,5 +255,3 @@ elif menu == "📋 Lista de Pendientes":
                     if st.button("Eliminar", key=f"del_{idx}"):
                         st.session_state.agenda_db.pop(idx)
                         st.rerun()
-
-```
